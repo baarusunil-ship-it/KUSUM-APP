@@ -694,11 +694,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
       Bonakal Mandal · Khammam · TGNPDCL<br>
       2,838 farmers pre-loaded<br>
       Works on Chrome, Safari, Firefox — Android + iPhone<br>
-      Fully offline · Add to Home Screen recommended<br><br>
+      Data saved to cloud permanently<br><br>
       Records saved: <b id="exp-count">0</b>
     </p>
     <br>
-    <button class="exp-btn danger" onclick="clearAll()">🗑 Clear All Local Records</button>
+    <button class="exp-btn" onclick="showChangePinModal()" style="border-color:var(--blue);color:var(--blue)">&#128273; Change Admin PIN</button>
+    <button class="exp-btn danger" onclick="clearAll()">&#128465; Clear All Local Records</button>
   </div>
 </div>
 
@@ -885,15 +886,12 @@ document.addEventListener('DOMContentLoaded', function() {
   if(expDateEl) expDateEl.value=fmtDateISO(new Date());
   updateExpSummary();
   renderExpenses();
-  // Set today's date for attendance
-  curAttDate = new Date();
-  renderAttendance();
-  // Set today for expense date
-  var today2 = new Date();
-  var expDateEl = document.getElementById('f-exp-date');
-  if(expDateEl) expDateEl.value = fmtDateISO(today2);
-  updateExpSummary();
-  renderExpenses();
+  // Load everything from cloud on every page open
+  if(navigator.onLine) {
+    setTimeout(function() {
+      loadFromCloud();
+    }, 500);
+  }
 
   var sup = localStorage.getItem('bviq_sup');
   var team = localStorage.getItem('bviq_team');
@@ -902,7 +900,14 @@ document.addEventListener('DOMContentLoaded', function() {
   var hh = document.querySelector('.hdr').offsetHeight;
   document.querySelector('.tabs').style.top = hh + 'px';
 });
-window.addEventListener('online',  function(){ setOffline(false); });
+window.addEventListener('online', function(){
+  setOffline(false);
+  // Reload fresh data from cloud when connection restored
+  setTimeout(function(){
+    syncData();
+    loadFromCloud();
+  }, 1000);
+});
 window.addEventListener('offline', function(){ setOffline(true);  });
 function checkOnline(){ setOffline(!navigator.onLine); }
 function setOffline(v){ document.getElementById('offbar').classList.toggle('show', v); }
@@ -1150,6 +1155,11 @@ function submitSurvey() {
   saveRecs();
   updateDash();
   updateBadge();
+  // Upload photo to Cloudinary + sync
+  if(motorPhotoData && navigator.onLine) {
+    uploadMotorPhotoAndSync(rec);
+  }
+  autoSyncIfOnline();
   resetForm();
   showToast('Saved: ' + rec.consumer_name);
   goTab('records');
@@ -1505,7 +1515,7 @@ function saveAttendance(){
   if(!entries.length){ showToast('Mark attendance first'); return; }
   attRecords=attRecords.filter(function(r){ return r.date!==isoStr; });
   attRecords.unshift({date:isoStr,dateDisplay:fmtDate(curAttDate),savedAt:new Date().toISOString(),entries:entries});
-  saveAtt(); renderAttendance(); showToast('Attendance saved for '+fmtDate(curAttDate));
+  saveAtt(); autoSyncIfOnline(); renderAttendance(); showToast('Attendance saved for '+fmtDate(curAttDate));
 }
 function renderAttHistory(){
   var el=document.getElementById('att-history');
@@ -1543,7 +1553,7 @@ function saveNewEmp(){
   var name=document.getElementById('new-emp-name').value.trim();
   if(!name){ showToast('Enter employee name'); return; }
   var emp={id:'EMP-'+Date.now(),name:name,role:document.getElementById('new-emp-role').value.trim(),mobile:document.getElementById('new-emp-mobile').value.trim(),team:document.getElementById('new-emp-team').value.trim(),type:document.getElementById('new-emp-type').value,addedOn:new Date().toISOString()};
-  employees.push(emp); saveEmployees(); cancelAddEmp(); renderAttendance(); showToast('Added: '+emp.name);
+  employees.push(emp); saveEmployees(); autoSyncIfOnline(); cancelAddEmp(); renderAttendance(); showToast('Added: '+emp.name);
 }
 function removeEmp(empId){
   if(!confirm('Remove this employee?')) return;
@@ -1579,7 +1589,7 @@ function saveExpense(){
   var dateVal=document.getElementById('f-exp-date').value;
   if(!dateVal){ showToast('Select date'); return; }
   var exp={id:'EXP-'+Date.now(),ts:new Date().toISOString(),date:dateVal,type:curExpType,amount:amt,paidBy:document.getElementById('f-exp-paidby').value,desc:document.getElementById('f-exp-desc').value.trim(),by:document.getElementById('f-exp-by').value.trim(),hasBill:curBillData?true:false,bill:curBillData||null};
-  expRecords.unshift(exp); saveExp(); updateExpSummary(); renderExpenses(); resetExpForm();
+  expRecords.unshift(exp); saveExp(); autoSyncIfOnline(); updateExpSummary(); renderExpenses(); resetExpForm();
   showToast('Saved: Rs.'+amt.toFixed(2)+' — '+exp.type);
 }
 function resetExpForm(){
@@ -1825,7 +1835,7 @@ function saveQtyEdit(){
     if(qty > s.qty){ showToast('Cannot deduct more than available ('+s.qty+')'); return; }
     s.qty = (parseFloat(s.qty)||0) - qty;
   }
-  saveStock(); closeEditQtyModal(); renderStock();
+  saveStock(); autoSyncIfOnline(); closeEditQtyModal(); renderStock();
   showToast((mode==='add'?'Added':'Deducted')+': '+qty+' '+s.unit+' of '+s.name);
 }
 function updateLiftUnit(){
@@ -1882,6 +1892,10 @@ function saveLift(){
   };
   liftRecords.unshift(rec);
   saveLiftRec();
+  if(liftPhoto && navigator.onLine) {
+    uploadLiftPhotoAndSync(rec);
+  }
+  autoSyncIfOnline();
   renderStock();
   renderLifts();
   resetLiftForm();
@@ -1961,13 +1975,52 @@ function loadAuthData(){
   try { authData    = JSON.parse(localStorage.getItem(AUTH_SK)   || '{}'); } catch(e){ authData={}; }
   try { salaryData  = JSON.parse(localStorage.getItem(SAL_SK)    || '{}'); } catch(e){ salaryData={}; }
   try { paymentData = JSON.parse(localStorage.getItem(PAYMT_SK)  || '{}'); } catch(e){ paymentData={}; }
-  // Ensure admin exists
+  // Ensure admin exists locally
   if(!authData[ADMIN_ID]){
     authData[ADMIN_ID] = {pin: ADMIN_PIN, empDbId: 'ADMIN', isAdmin: true};
-    saveAuthData();
+    localStorage.setItem(AUTH_SK, JSON.stringify(authData));
   }
+  // Also load from Supabase
+  if(navigator.onLine) loadAuthFromCloud();
 }
-function saveAuthData(){ localStorage.setItem(AUTH_SK, JSON.stringify(authData)); }
+function saveAuthData(){
+  localStorage.setItem(AUTH_SK, JSON.stringify(authData));
+  // Sync to Supabase
+  if(navigator.onLine) syncAuthToCloud();
+}
+
+// ── SUPABASE AUTH SYNC ────────────────────────────────────────────────────
+function syncAuthToCloud(){
+  var rows = [];
+  Object.keys(authData).forEach(function(loginId){
+    var a = authData[loginId];
+    rows.push({
+      emp_login_id: loginId,
+      pin_hash: a.pin,
+      emp_db_id: a.empDbId || null,
+      is_admin: a.isAdmin || false
+    });
+  });
+  if(!rows.length) return;
+  supaFetch('POST', 'auth_users', rows, null)
+    .catch(function(e){ console.error('Auth sync error:', e); });
+}
+
+function loadAuthFromCloud(){
+  supaFetch('GET', 'auth_users', null, 'select=*')
+    .then(function(rows){
+      if(!rows || !rows.length) return;
+      rows.forEach(function(r){
+        authData[r.emp_login_id] = {
+          pin: r.pin_hash,
+          empDbId: r.emp_db_id,
+          isAdmin: r.is_admin || false
+        };
+      });
+      localStorage.setItem(AUTH_SK, JSON.stringify(authData));
+    })
+    .catch(function(e){ console.error('Auth load error:', e); });
+}
 function saveSalaryData(){ localStorage.setItem(SAL_SK, JSON.stringify(salaryData)); }
 function savePaymentData(){ localStorage.setItem(PAYMT_SK, JSON.stringify(paymentData)); }
 
@@ -1981,7 +2034,36 @@ function doLogin(){
   if(!pin || pin.length < 4){ errEl.textContent = 'Enter 4-digit PIN'; return; }
 
   var auth = authData[empId];
-  if(!auth){ errEl.textContent = 'Employee ID not found'; return; }
+  if(!auth){
+    // Try loading from cloud first
+    if(navigator.onLine){
+      errEl.textContent = 'Checking cloud...';
+      supaFetch('GET','auth_users',null,'select=*&emp_login_id=eq.'+encodeURIComponent(empId))
+        .then(function(rows){
+          if(!rows||!rows.length){ errEl.textContent='Employee ID not found'; return; }
+          var r=rows[0];
+          authData[r.emp_login_id]={pin:r.pin_hash,empDbId:r.emp_db_id,isAdmin:r.is_admin||false};
+          localStorage.setItem(AUTH_SK,JSON.stringify(authData));
+          // Retry login
+          if(r.pin_hash !== pin){ errEl.textContent='Incorrect PIN'; return; }
+          var emp2=null;
+          if(r.emp_login_id===ADMIN_ID){
+            emp2={empDbId:'ADMIN',empId:'ADMIN',name:'Admin',role:'Admin',isAdmin:true};
+          } else {
+            for(var i=0;i<employees.length;i++){
+              if(employees[i].id===r.emp_db_id){emp2=employees[i];break;}
+            }
+            if(!emp2){errEl.textContent='Profile not found. Contact admin.';return;}
+            emp2=Object.assign({},emp2,{empDbId:emp2.id,empId:r.emp_login_id,isAdmin:false});
+          }
+          currentUser=emp2; onLoginSuccess(); setTimeout(loadFromCloud,1000);
+        })
+        .catch(function(){ errEl.textContent='Employee ID not found'; });
+    } else {
+      errEl.textContent = 'Employee ID not found';
+    }
+    return;
+  }
   if(auth.pin !== pin){ errEl.textContent = 'Incorrect PIN'; return; }
 
   // Find employee profile
@@ -1999,6 +2081,11 @@ function doLogin(){
 
   currentUser = emp;
   onLoginSuccess();
+  // Sync auth + load fresh data from cloud
+  if(navigator.onLine){
+    syncAuthToCloud();
+    setTimeout(loadFromCloud, 1000);
+  }
 }
 
 function onLoginSuccess(){
@@ -2104,10 +2191,10 @@ function savePinSetup(){
   var oldId = getEmpLoginId(empDbId);
   if(oldId && oldId !== newId) delete authData[oldId];
   authData[newId] = {pin: pin1, empDbId: empDbId, isAdmin: false};
-  saveAuthData();
+  saveAuthData(); // this now syncs to Supabase automatically
   closePinSetup();
   renderSalaryList();
-  showToast('Login set for Employee ID: '+newId);
+  showToast('Login set: '+newId+' — synced to cloud!');
 }
 
 // ── SALARY MODULE ─────────────────────────────────────────────────────────
@@ -2324,9 +2411,372 @@ function doChangePIN(){
   if(nw !== cnf){ showToast('PINs do not match'); return; }
   authData[ADMIN_ID].pin = nw;
   ADMIN_PIN = nw;
-  saveAuthData();
+  saveAuthData(); // syncs to Supabase
   document.getElementById('change-pin-modal').classList.remove('show');
-  showToast('Admin PIN changed successfully');
+  showToast('Admin PIN changed and synced to cloud!');
+}
+
+
+// ════════════════════════════════════════════════════════════
+//  SUPABASE + CLOUDINARY INTEGRATION
+// ════════════════════════════════════════════════════════════
+var SUPA_URL = 'https://amnhjhhmtmymkfgdfsef.supabase.co';
+var SUPA_KEY = 'sb_publishable_WgGyH5E4uA_VTaCq1zBaYg_4nfnjjye';
+var CLD_CLOUD = 'dwor3ca1c';
+var CLD_PRESET = 'kusum_unsigned';
+
+// ── SUPABASE HELPER ───────────────────────────────────────────────────────
+function supaFetch(method, table, data, query) {
+  var url = SUPA_URL + '/rest/v1/' + table;
+  if(query) url += '?' + query;
+  var opts = {
+    method: method,
+    headers: {
+      'apikey': SUPA_KEY,
+      'Authorization': 'Bearer ' + SUPA_KEY,
+      'Content-Type': 'application/json',
+      'Prefer': method === 'POST' ? 'resolution=merge-duplicates' : ''
+    }
+  };
+  if(data) opts.body = JSON.stringify(data);
+  return fetch(url, opts).then(function(r) {
+    if(!r.ok) return r.text().then(function(t) { throw new Error(t); });
+    return r.json().catch(function() { return {}; });
+  });
+}
+
+function supaUpsert(table, data) {
+  return supaFetch('POST', table, Array.isArray(data) ? data : [data], null);
+}
+function supaSelect(table, query) {
+  return supaFetch('GET', table, null, query || 'select=*&order=created_at.desc');
+}
+function supaUpdate(table, match, data) {
+  return supaFetch('PATCH', table, data, match);
+}
+
+// ── CLOUDINARY UPLOAD ────────────────────────────────────────────────────
+function uploadToCloudinary(base64data, folder) {
+  return new Promise(function(resolve, reject) {
+    if(!base64data) { resolve(null); return; }
+    var formData = new FormData();
+    formData.append('file', base64data);
+    formData.append('upload_preset', CLD_PRESET);
+    formData.append('folder', 'kusum/' + (folder||'misc'));
+    fetch('https://api.cloudinary.com/v1_1/' + CLD_CLOUD + '/image/upload', {
+      method: 'POST', body: formData
+    }).then(function(r) { return r.json(); })
+      .then(function(d) { resolve(d.secure_url || null); })
+      .catch(function(e) { console.error('Cloudinary error:', e); resolve(null); });
+  });
+}
+
+// ── SYNC STATUS INDICATOR ─────────────────────────────────────────────────
+var syncInProgress = false;
+function setSyncStatus(status) {
+  var el = document.getElementById('sico');
+  if(!el) return;
+  if(status === 'syncing') el.textContent = '⟳';
+  else if(status === 'done') { el.textContent = '✓'; setTimeout(function(){ el.textContent = '↑'; }, 2000); }
+  else if(status === 'error') { el.textContent = '!'; setTimeout(function(){ el.textContent = '↑'; }, 3000); }
+  else el.textContent = '↑';
+}
+
+// ── SYNC ALL TO SUPABASE ──────────────────────────────────────────────────
+function syncData() {
+  if(!navigator.onLine) { showToast('No internet'); return; }
+  if(syncInProgress) { showToast('Sync in progress...'); return; }
+  syncInProgress = true;
+  setSyncStatus('syncing');
+  showToast('Syncing to cloud...');
+  
+  var promises = [];
+
+  // 1. Survey records
+  var unsynced = records.filter(function(r) { return !r.cloud_synced; });
+  if(unsynced.length) {
+    var surveyRows = unsynced.map(function(r) {
+      return {
+        id: r.id, date: r.date, time: r.time,
+        sno: r.sno, usc: r.usc_number || r.usc, name: r.consumer_name || r.name,
+        mobile: r.consumer_mobile || r.mobile,
+        district: r.district, mandal: r.mandal, village: r.village, hp: r.motor_capacity || r.hp,
+        mobile_type: r.mobile_type, motor_ok: r.motor_ok, motor_phase: r.motor_phase,
+        consumer_interest: r.consumer_interest, consumer_response: r.consumer_response,
+        current_crop: r.current_crop, internal_remark: r.internal_remark,
+        lat: r.lat, lng: r.lng, accuracy: r.accuracy,
+        install_status: r.install_status || r.status,
+        supervisor: r.supervisor, team: r.team,
+        motor_photo_url: r.motor_photo_url || null
+      };
+    });
+    promises.push(
+      supaUpsert('survey_records', surveyRows).then(function() {
+        unsynced.forEach(function(r) { r.cloud_synced = true; r.synced = true; });
+        saveRecs();
+      })
+    );
+  }
+
+  // 2. Employees
+  if(employees.length) {
+    var empRows = employees.map(function(e) {
+      var sal = salaryData[e.id] || {};
+      var loginId = getEmpLoginId(e.id);
+      return {
+        id: e.id, name: e.name, role: e.role || '', mobile: e.mobile || '',
+        team: e.team || '', type: e.type || '',
+        emp_login_id: loginId || null,
+        salary_fixed: sal.fixed || 0,
+        salary_daily: sal.daily || 0,
+        salary_incentive: sal.incentive || 0,
+        salary_workdays: sal.workdays || 26
+      };
+    });
+    promises.push(supaUpsert('employees', empRows));
+  }
+
+  // 3. Attendance
+  var attRows = [];
+  attRecords.forEach(function(rec) {
+    rec.entries.forEach(function(e) {
+      var emp = getEmpById(e.empId);
+      attRows.push({
+        id: rec.date + '_' + e.empId,
+        date: rec.date,
+        emp_id: e.empId,
+        emp_name: emp ? emp.name : e.empId,
+        emp_role: emp ? (emp.role||'') : '',
+        emp_team: emp ? (emp.team||'') : '',
+        status: e.status,
+        check_in_time: e.time || '',
+        lat: e.lat || '', lng: e.lng || ''
+      });
+    });
+  });
+  if(attRows.length) promises.push(supaUpsert('attendance_records', attRows));
+
+  // 4. Expenses
+  if(expRecords.length) {
+    var expRows = expRecords.map(function(e) {
+      return {
+        id: e.id, date: e.date, type: e.type, amount: e.amount,
+        paid_by: e.paidBy || '', description: e.desc || '',
+        submitted_by: e.by || '',
+        has_bill: e.hasBill || false,
+        bill_url: e.bill_url || null
+      };
+    });
+    promises.push(supaUpsert('expenses', expRows));
+  }
+
+  // 5. Stock
+  if(stockItems.length) {
+    var stockRows = stockItems.map(function(s) {
+      return {
+        id: s.id, name: s.name, qty: s.qty,
+        unit: s.unit, cat: s.cat, min_qty: s.min || 0
+      };
+    });
+    promises.push(supaUpsert('stock_items', stockRows));
+  }
+
+  // 6. Lift records
+  if(liftRecords.length) {
+    var liftRows = liftRecords.map(function(r) {
+      return {
+        id: r.id, date: r.date,
+        mat_id: r.matId, mat_name: r.matName,
+        qty: r.qty, unit: r.unit,
+        farmer: r.farmer, village: r.village || '',
+        lifted_by: r.by || '', remarks: r.remarks || '',
+        has_photo: r.hasPhoto || false,
+        photo_url: r.photo_url || null
+      };
+    });
+    promises.push(supaUpsert('lift_records', liftRows));
+  }
+
+  // 7. Salary payments
+  var payRows = [];
+  Object.keys(paymentData).forEach(function(k) {
+    var parts = k.split('_');
+    var monthKey = parts.slice(1).join('_');
+    payRows.push({
+      id: k, emp_id: parts[0], month_key: monthKey,
+      status: paymentData[k].status || 'pending',
+      paid_amount: paymentData[k].paidAmt || 0
+    });
+  });
+  if(payRows.length) promises.push(supaUpsert('salary_payments', payRows));
+
+  Promise.all(promises).then(function() {
+    syncInProgress = false;
+    setSyncStatus('done');
+    updateBadge();
+    showToast('✓ All data synced to cloud!');
+  }).catch(function(e) {
+    syncInProgress = false;
+    setSyncStatus('error');
+    showToast('Sync error: ' + e.message);
+    console.error('Sync error:', e);
+  });
+}
+
+// ── UPLOAD PHOTO TO CLOUDINARY BEFORE SAVING ─────────────────────────────
+function uploadMotorPhotoAndSync(rec) {
+  if(!rec.motor_photo || !navigator.onLine) return;
+  uploadToCloudinary(rec.motor_photo, 'survey').then(function(url) {
+    if(url) {
+      rec.motor_photo_url = url;
+      rec.motor_photo = null; // remove base64, save URL only
+      // Update in Supabase
+      supaUpdate('survey_records', 'id=eq.' + rec.id, {motor_photo_url: url})
+        .catch(function(e) { console.error('Photo URL update failed:', e); });
+      saveRecs();
+    }
+  });
+}
+
+function uploadLiftPhotoAndSync(rec) {
+  if(!rec.photo || !navigator.onLine) return;
+  uploadToCloudinary(rec.photo, 'lifts').then(function(url) {
+    if(url) {
+      rec.photo_url = url;
+      rec.photo = null;
+      supaUpdate('lift_records', 'id=eq.' + rec.id, {photo_url: url, has_photo: true})
+        .catch(function(e) { console.error('Lift photo URL update failed:', e); });
+      saveLiftRec();
+    }
+  });
+}
+
+// ── AUTO SYNC on submit ───────────────────────────────────────────────────
+function autoSyncIfOnline() {
+  if(navigator.onLine && !syncInProgress) {
+    setTimeout(syncData, 1500);
+  }
+}
+
+// ── LOAD ALL DATA FROM CLOUD ──────────────────────────────────────────────
+function loadFromCloud() {
+  if(!navigator.onLine) { 
+    showToast('Offline — showing saved data');
+    return; 
+  }
+  
+  // Load employees first (others depend on this)
+  supaSelect('employees', 'select=*&order=added_on.asc').then(function(rows) {
+    if(rows && rows.length) {
+      employees = rows.map(function(r) {
+        salaryData[r.id] = {
+          fixed: r.salary_fixed||0, daily: r.salary_daily||0,
+          incentive: r.salary_incentive||0, workdays: r.salary_workdays||26
+        };
+        return {id:r.id, name:r.name, role:r.role||'', mobile:r.mobile||'', team:r.team||'', type:r.type||''};
+      });
+      saveEmployees(); 
+      saveSalaryData();
+      renderAttendance();
+      renderSalaryList();
+    }
+  }).catch(function(e) { console.error('Load employees:', e); });
+
+  // Load survey records
+  supaSelect('survey_records', 'select=*&order=created_at.desc&limit=1000').then(function(rows) {
+    if(rows && rows.length) {
+      var cloudIds = {};
+      rows.forEach(function(r){ cloudIds[r.id]=true; });
+      // Keep local-only records + add cloud records
+      var localOnly = records.filter(function(r){ return !cloudIds[r.id]; });
+      var cloudRecs = rows.map(function(r) {
+        return {
+          id:r.id, date:r.date, time:r.time,
+          sno:r.sno, usc:r.usc, usc_number:r.usc,
+          name:r.name, consumer_name:r.name,
+          mobile:r.mobile, consumer_mobile:r.mobile,
+          district:r.district, mandal:r.mandal, village:r.village,
+          hp:r.hp, motor_capacity:r.hp,
+          mobile_type:r.mobile_type, motor_ok:r.motor_ok,
+          motor_phase:r.motor_phase,
+          consumer_interest:r.consumer_interest,
+          consumer_response:r.consumer_response,
+          current_crop:r.current_crop,
+          internal_remark:r.internal_remark,
+          lat:r.lat, lng:r.lng,
+          install_status:r.install_status, status:r.install_status,
+          supervisor:r.supervisor, team:r.team,
+          motor_photo_url:r.motor_photo_url,
+          cloud_synced:true, synced:true
+        };
+      });
+      records = cloudRecs.concat(localOnly);
+      saveRecs(); updateDash(); renderRecords();
+    }
+  }).catch(function(e) { console.error('Load surveys:', e); });
+
+  // Load stock items
+  supaSelect('stock_items', 'select=*').then(function(rows) {
+    if(rows && rows.length) {
+      stockItems = rows.map(function(r) {
+        return {id:r.id, name:r.name, qty:parseFloat(r.qty)||0, unit:r.unit, cat:r.cat, min:r.min_qty||0};
+      });
+      saveStock(); renderStock();
+    }
+  }).catch(function(e) { console.error('Load stock:', e); });
+
+  // Load expenses
+  supaSelect('expenses', 'select=*&order=created_at.desc').then(function(rows) {
+    if(rows && rows.length) {
+      expRecords = rows.map(function(r) {
+        return {id:r.id, date:r.date, type:r.type, amount:r.amount,
+                paidBy:r.paid_by||'', desc:r.description||'', by:r.submitted_by||'',
+                hasBill:r.has_bill||false, bill_url:r.bill_url||null};
+      });
+      saveExp(); updateExpSummary(); renderExpenses();
+    }
+  }).catch(function(e) { console.error('Load expenses:', e); });
+
+  // Load attendance records
+  supaSelect('attendance_records', 'select=*&order=date.desc&limit=200').then(function(rows) {
+    if(rows && rows.length) {
+      var byDate = {};
+      rows.forEach(function(r){
+        if(!byDate[r.date]) byDate[r.date] = {date:r.date, dateDisplay:r.date, entries:[]};
+        byDate[r.date].entries.push({
+          empId:r.emp_id, status:r.status, time:r.check_in_time||'', lat:r.lat||'', lng:r.lng||''
+        });
+      });
+      attRecords = Object.values(byDate).sort(function(a,b){ return b.date.localeCompare(a.date); });
+      saveAtt(); renderAttendance();
+    }
+  }).catch(function(e) { console.error('Load attendance:', e); });
+
+  // Load lift records
+  supaSelect('lift_records', 'select=*&order=created_at.desc&limit=200').then(function(rows) {
+    if(rows && rows.length) {
+      liftRecords = rows.map(function(r) {
+        return {id:r.id, date:r.date, matId:r.mat_id, matName:r.mat_name,
+                qty:r.qty, unit:r.unit, farmer:r.farmer, village:r.village||'',
+                by:r.lifted_by||'', remarks:r.remarks||'',
+                hasPhoto:r.has_photo||false, photo_url:r.photo_url||null};
+      });
+      saveLiftRec(); renderLifts();
+    }
+  }).catch(function(e) { console.error('Load lifts:', e); });
+
+  // Load salary payments
+  supaSelect('salary_payments', 'select=*').then(function(rows) {
+    if(rows && rows.length) {
+      rows.forEach(function(r){
+        paymentData[r.emp_id+'_'+r.month_key] = {status:r.status||'pending', paidAmt:r.paid_amount||0};
+      });
+      savePaymentData();
+    }
+  }).catch(function(e) { console.error('Load payments:', e); });
+
+  // Load auth
+  loadAuthFromCloud();
 }
 
 function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
