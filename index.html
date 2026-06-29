@@ -341,6 +341,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
 .sal-hero-amt{font-size:32px;font-weight:800;line-height:1}
 .sal-hero-sub{font-size:11px;opacity:.7;margin-top:4px}
 .sal-breakdown{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.sal-item.full{grid-column:1/-1}
 .sal-item{background:var(--card);border-radius:var(--rs);padding:11px 12px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
 .sal-item-label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:3px}
 .sal-item-val{font-size:16px;font-weight:800;color:var(--dark)}
@@ -406,7 +407,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
         <div class="bsub">Bonakal · 2,838 Farmers · TGNPDCL</div>
       </div>
     </div>
-    <button class="sync-btn" onclick="syncData()"><span id="sico">↑</span> Sync</button>
+    <div id="sync-indicator" style="background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);color:#fff;padding:5px 10px;border-radius:16px;font-size:10px;font-weight:600;display:flex;align-items:center;gap:5px"><span id="sico">●</span><span id="sync-label">Ready</span></div>
   </div>
 </header>
 
@@ -728,7 +729,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
   <!-- Employee list -->
   <div id="emp-att-list"></div>
 
-  <button class="add-emp-btn" onclick="showAddEmp()">+ Add Employee</button>
+  <button class="add-emp-btn" id="add-emp-btn" onclick="showAddEmp()">+ Add Employee</button>
 
   <!-- Add Employee modal inline -->
   <div id="add-emp-box" style="display:none" class="card">
@@ -827,7 +828,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-s
       <div style="margin-top:6px;font-size:10px;color:var(--muted)">Bill upload is optional — add if available</div>
     </div>
 
-    <button class="save-exp-btn" onclick="saveExpense()">💰 Save Expense</button>
+    <button class="save-exp-btn" id="exp-save-btn" onclick="saveExpense()">💰 Save Expense</button>
   </div>
 
   <!-- Expense Records -->
@@ -908,7 +909,10 @@ window.addEventListener('online', function(){
     loadFromCloud();
   }, 1000);
 });
-window.addEventListener('offline', function(){ setOffline(true);  });
+window.addEventListener('offline', function(){ 
+  setOffline(true); 
+  setSyncStatus('offline');
+});
 function checkOnline(){ setOffline(!navigator.onLine); }
 function setOffline(v){ document.getElementById('offbar').classList.toggle('show', v); }
 
@@ -1160,8 +1164,10 @@ function submitSurvey() {
     uploadMotorPhotoAndSync(rec);
   }
   autoSyncIfOnline();
+  var saveBtn2 = document.getElementById('survey-save-btn');
+  if(saveBtn2){ saveBtn2.textContent = '✓ Saved!'; saveBtn2.disabled = false; setTimeout(function(){ if(saveBtn2) saveBtn2.textContent = '💾 Save Survey Record'; }, 2000); }
   resetForm();
-  showToast('Saved: ' + rec.consumer_name);
+  showToast('✓ Saved: ' + rec.consumer_name);
   goTab('records');
 }
 
@@ -1451,12 +1457,17 @@ function renderAttendance(){
     renderAttHistory(); return;
   }
   var html='';
-  employees.forEach(function(emp){
+  // Filter: non-admin sees only their own card
+  var visibleEmps = employees;
+  if(currentUser && !currentUser.isAdmin) {
+    visibleEmps = employees.filter(function(e){ return e.id === currentUser.empDbId; });
+  }
+  visibleEmps.forEach(function(emp){
     var cur=curAttData[emp.id]||{}, st=cur.status||'';
     var gpsLbl=cur.lat?(parseFloat(cur.lat).toFixed(4)+', '+parseFloat(cur.lng).toFixed(4)):'No GPS';
     html+='<div class="emp-row">';
     html+='<div class="emp-name-row"><div><div class="emp-name">'+escHtml(emp.name)+'</div><div class="emp-role">'+escHtml(emp.role||'')+(emp.team?' · '+emp.team:'')+'</div></div>';
-    html+='<button onclick="removeEmp(\''+emp.id+'\')" style="background:none;border:none;font-size:14px;color:var(--muted);cursor:pointer;padding:4px">&#10005;</button></div>';
+    html+=(currentUser&&currentUser.isAdmin?'<button onclick="removeEmp(\''+emp.id+'\')" style="background:none;border:none;font-size:14px;color:var(--muted);cursor:pointer;padding:4px">&#10005;</button>':'')+'</div>';
     html+='<div class="att-pills">';
     html+='<div class="att-pill'+(st==='present'?' sel-present':'')+'" onclick="setAtt(\''+emp.id+'\',\'present\',this)">Present</div>';
     html+='<div class="att-pill'+(st==='absent'?' sel-absent':'')+'" onclick="setAtt(\''+emp.id+'\',\'absent\',this)">Absent</div>';
@@ -1470,10 +1481,13 @@ function renderAttendance(){
     var loginId=getEmpLoginId(emp.id);
     html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">';
     html+='<span style="font-size:10px;color:var(--muted)">Login ID: <b style="color:var(--dark)">'+(loginId||'<span style="color:var(--red)">Not set</span>')+'</b></span>';
-    html+='<button onclick="openPinSetup(\''+emp.id+'\')" style="padding:5px 12px;background:var(--g);color:#fff;border:none;border-radius:8px;font-size:10px;font-weight:700;cursor:pointer">&#128273; Set PIN</button>';
+    html+=(currentUser&&currentUser.isAdmin?'<button onclick="openPinSetup(\''+emp.id+'\')" style="padding:5px 12px;background:var(--g);color:#fff;border:none;border-radius:8px;font-size:10px;font-weight:700;cursor:pointer">&#128273; Set PIN</button>':'');
     html+='</div></div>';
   });
   el.innerHTML=html;
+  // Show/hide Add Employee button based on role
+  var addBtn = document.getElementById('add-emp-btn');
+  if(addBtn) addBtn.style.display = (currentUser && currentUser.isAdmin) ? '' : 'none';
   renderAttHistory();
 }
 function setAtt(empId,status,el){
@@ -1515,11 +1529,22 @@ function saveAttendance(){
   if(!entries.length){ showToast('Mark attendance first'); return; }
   attRecords=attRecords.filter(function(r){ return r.date!==isoStr; });
   attRecords.unshift({date:isoStr,dateDisplay:fmtDate(curAttDate),savedAt:new Date().toISOString(),entries:entries});
-  saveAtt(); autoSyncIfOnline(); renderAttendance(); showToast('Attendance saved for '+fmtDate(curAttDate));
+  saveAtt(); autoSyncIfOnline(); showToast('✓ Attendance saved & syncing...');
+  setTimeout(function(){ renderAttendance(); }, 500);
 }
 function renderAttHistory(){
   var el=document.getElementById('att-history');
-  var recent=attRecords.slice(0,10);
+  // Non-admin sees only their own history
+  var filteredRecs = attRecords;
+  if(currentUser && !currentUser.isAdmin) {
+    filteredRecs = attRecords.map(function(rec){
+      return {
+        date: rec.date, dateDisplay: rec.dateDisplay,
+        entries: rec.entries.filter(function(e){ return e.empId === currentUser.empDbId; })
+      };
+    }).filter(function(rec){ return rec.entries.length > 0; });
+  }
+  var recent=filteredRecs.slice(0,10);
   if(!recent.length){ el.innerHTML=''; return; }
   var html='';
   recent.forEach(function(rec){
@@ -1590,7 +1615,7 @@ function saveExpense(){
   if(!dateVal){ showToast('Select date'); return; }
   var exp={id:'EXP-'+Date.now(),ts:new Date().toISOString(),date:dateVal,type:curExpType,amount:amt,paidBy:document.getElementById('f-exp-paidby').value,desc:document.getElementById('f-exp-desc').value.trim(),by:document.getElementById('f-exp-by').value.trim(),hasBill:curBillData?true:false,bill:curBillData||null};
   expRecords.unshift(exp); saveExp(); autoSyncIfOnline(); updateExpSummary(); renderExpenses(); resetExpForm();
-  showToast('Saved: Rs.'+amt.toFixed(2)+' — '+exp.type);
+  showToast('✓ Expense saved: Rs.'+amt.toFixed(2));
 }
 function resetExpForm(){
   document.querySelectorAll('.exp-type-opt').forEach(function(o){ o.classList.remove('sel-exp'); });
@@ -1836,7 +1861,7 @@ function saveQtyEdit(){
     s.qty = (parseFloat(s.qty)||0) - qty;
   }
   saveStock(); autoSyncIfOnline(); closeEditQtyModal(); renderStock();
-  showToast((mode==='add'?'Added':'Deducted')+': '+qty+' '+s.unit+' of '+s.name);
+  showToast('✓ '+(mode==='add'?'Added':'Deducted')+': '+qty+' '+s.unit+' — syncing...');
 }
 function updateLiftUnit(){
   var id=document.getElementById('f-lift-mat').value;
@@ -1899,7 +1924,7 @@ function saveLift(){
   renderStock();
   renderLifts();
   resetLiftForm();
-  showToast('Lifted: '+qty+' '+s.unit+' of '+s.name+' (Stock: '+s.qty+' remaining)');
+  showToast('✓ Lifted: '+qty+' '+s.unit+' — saved & syncing...');
 }
 function resetLiftForm(){
   ['f-lift-qty','f-lift-farmer','f-lift-village','f-lift-by','f-lift-remarks'].forEach(function(id){ document.getElementById(id).value=''; });
@@ -2243,15 +2268,40 @@ function calcSalary(empDbId, monthKey){
   var setup = salaryData[empDbId] || {fixed:0, daily:0, incentive:0, workdays:26, ot:0};
   var att   = getAttForMonth(empDbId, monthKey);
   var installations = getInstallationsForEmp(empDbId, monthKey);
+  
+  var fixedMonthly  = parseFloat(setup.fixed)     || 0;
+  var dailyAllow    = parseFloat(setup.daily)      || 0;
+  var incentiveRate = parseFloat(setup.incentive)  || 0;
+  var workDays      = parseInt(setup.workdays)     || 26;
+  
+  // Pro-rata: daily rate = fixed / workdays
+  var dailyRate     = workDays > 0 ? fixedMonthly / workDays : 0;
   var effectiveDays = att.present + (att.half * 0.5);
-  var fixedComp   = parseFloat(setup.fixed) || 0;
-  var dailyComp   = effectiveDays * (parseFloat(setup.daily) || 0);
-  var incentiveComp = installations * (parseFloat(setup.incentive) || 0);
-  var total = fixedComp + dailyComp + incentiveComp;
+  
+  // Components
+  var proRataComp   = dailyRate * effectiveDays;                    // Main salary pro-rata
+  var allowanceComp = dailyAllow * effectiveDays;                   // Daily allowance
+  var incentiveComp = incentiveRate * installations;                 // Per installation bonus
+  var total         = proRataComp + allowanceComp + incentiveComp;
+  
+  // Loss of pay
+  var lopDays       = Math.max(0, workDays - att.present - (att.half * 0.5) - att.leave);
+  var lopAmount     = dailyRate * lopDays;
+  
   return {
-    fixed: fixedComp, daily: dailyComp, incentive: incentiveComp,
-    total: total, effectiveDays: effectiveDays, installations: installations,
-    att: att, setup: setup
+    fixedMonthly: fixedMonthly,
+    dailyRate: dailyRate,
+    effectiveDays: effectiveDays,
+    proRata: proRataComp,
+    allowance: allowanceComp,
+    incentive: incentiveComp,
+    total: total,
+    lopDays: lopDays,
+    lopAmount: lopAmount,
+    installations: installations,
+    att: att,
+    setup: setup,
+    workDays: workDays
   };
 }
 
@@ -2289,10 +2339,13 @@ function renderSalaryList(){
     html += '</div><div style="text-align:right"><div class="emp-sal-total">Rs.'+sal.total.toFixed(0)+'</div>';
     html += '<span class="pay-status '+pmt.status+'">'+pmt.status.charAt(0).toUpperCase()+pmt.status.slice(1)+'</span></div></div>';
     html += '<div class="emp-sal-detail">';
-    html += 'Fixed: Rs.'+sal.fixed.toFixed(0)+' &nbsp;|&nbsp; ';
-    html += 'Allowance: Rs.'+sal.daily.toFixed(0)+' ('+sal.effectiveDays+' days) &nbsp;|&nbsp; ';
-    html += 'Incentive: Rs.'+sal.incentive.toFixed(0)+' ('+sal.installations+' installs)<br>';
-    html += 'Present: '+sal.att.present+' &nbsp; Half: '+sal.att.half+' &nbsp; Absent: '+sal.att.absent+' &nbsp; Leave: '+sal.att.leave;
+    html += 'Monthly: Rs.'+sal.fixedMonthly.toFixed(0)+' &nbsp;|&nbsp; Daily Rate: Rs.'+sal.dailyRate.toFixed(0)+'/day<br>';
+    html += 'Present: <b>'+sal.att.present+'</b> &nbsp; Half: '+sal.att.half+' &nbsp; Absent: <span style="color:var(--red)">'+sal.att.absent+'</span> &nbsp; Leave: '+sal.att.leave+'<br>';
+    html += 'Effective days: '+sal.effectiveDays+' / '+sal.workDays+' &nbsp;|&nbsp; ';
+    if(sal.lopDays > 0) html += '<span style="color:var(--red)">LOP: '+sal.lopDays.toFixed(1)+' days (Rs.'+sal.lopAmount.toFixed(0)+')</span><br>';
+    html += 'Pro-rata: Rs.'+sal.proRata.toFixed(0);
+    if(sal.allowance > 0) html += ' &nbsp;+ Allowance: Rs.'+sal.allowance.toFixed(0);
+    if(sal.incentive > 0) html += ' &nbsp;+ Incentive: Rs.'+sal.incentive.toFixed(0)+' ('+sal.installations+' installs)';
     html += '</div>';
     html += '<div class="sal-action-row">';
     html += '<div class="sal-action-btn" onclick="openSalSetup(\''+emp.id+'\')">&#9998; Salary</div>';
@@ -2306,6 +2359,8 @@ function renderSalaryList(){
   document.getElementById('sal-payroll-sub').textContent = employees.length+' employees';
   document.getElementById('sal-paid-count').textContent    = paidCount;
   document.getElementById('sal-pending-count').textContent = pendingCount;
+  // Show escalations
+  setTimeout(renderEscalations, 300);
 }
 
 function markPayment(empId, monthKey, status){
@@ -2355,6 +2410,7 @@ function renderMySlip(){
   var pmtKey = empId+'_'+monthKey;
   var pmt   = paymentData[pmtKey] || {status:'pending'};
   var el    = document.getElementById('myslip-content');
+  // Hero card
   html  = '<div class="sal-hero">';
   html += '<div class="sal-hero-name">'+escHtml(currentUser.name)+'</div>';
   html += '<div class="sal-hero-role">'+escHtml(currentUser.role||'')+(currentUser.team?' · '+currentUser.team:'')+'</div>';
@@ -2362,20 +2418,46 @@ function renderMySlip(){
   html += '<div class="sal-hero-amt">Rs.'+sal.total.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,',')+'</div>';
   html += '<span class="pay-status '+pmt.status+'" style="margin-top:8px;display:inline-block">'+pmt.status.charAt(0).toUpperCase()+pmt.status.slice(1)+'</span>';
   html += '</div>';
-  html += '<div class="sal-breakdown">';
-  html += '<div class="sal-item"><div class="sal-item-label">Fixed Salary</div><div class="sal-item-val">Rs.'+sal.fixed.toFixed(0)+'</div><div class="sal-item-sub">Monthly</div></div>';
-  html += '<div class="sal-item"><div class="sal-item-label">Daily Allowance</div><div class="sal-item-val">Rs.'+sal.daily.toFixed(0)+'</div><div class="sal-item-sub">'+sal.effectiveDays+' effective days</div></div>';
-  html += '<div class="sal-item"><div class="sal-item-label">Installation Incentive</div><div class="sal-item-val">Rs.'+sal.incentive.toFixed(0)+'</div><div class="sal-item-sub">'+sal.installations+' installations × Rs.'+(sal.setup.incentive||0)+'</div></div>';
-  html += '<div class="sal-item" style="border-left:3px solid var(--gm)"><div class="sal-item-label">Total Earnings</div><div class="sal-item-val" style="color:var(--gm)">Rs.'+sal.total.toFixed(0)+'</div><div class="sal-item-sub">'+fmtMonth(mySlipMonth)+'</div></div>';
+
+  // Attendance summary — most important for employee
+  html += '<div class="card">';
+  html += '<div class="card-title" style="font-size:13px">📅 Attendance — '+fmtMonth(mySlipMonth)+'</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">';
+  html += '<div style="background:#F0FAF4;border-radius:8px;padding:10px;text-align:center"><div style="font-size:22px;font-weight:800;color:#27AE60">'+sal.att.present+'</div><div style="font-size:10px;color:var(--muted)">Present</div></div>';
+  html += '<div style="background:#FEF2F2;border-radius:8px;padding:10px;text-align:center"><div style="font-size:22px;font-weight:800;color:var(--red)">'+sal.att.absent+'</div><div style="font-size:10px;color:var(--muted)">Absent</div></div>';
+  html += '<div style="background:#FFF7ED;border-radius:8px;padding:10px;text-align:center"><div style="font-size:22px;font-weight:800;color:var(--orange)">'+sal.att.half+'</div><div style="font-size:10px;color:var(--muted)">Half Day</div></div>';
+  html += '<div style="background:#F5F3FF;border-radius:8px;padding:10px;text-align:center"><div style="font-size:22px;font-weight:800;color:var(--purple)">'+sal.att.leave+'</div><div style="font-size:10px;color:var(--muted)">Leave</div></div>';
   html += '</div>';
-  // Attendance breakdown
-  html += '<div class="card"><div class="card-title" style="font-size:12px">Attendance — '+fmtMonth(mySlipMonth)+'</div>';
-  html += '<div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px">';
-  html += '<span style="color:#27AE60;font-weight:700">Present: '+sal.att.present+'</span>';
-  html += '<span style="color:var(--orange);font-weight:700">Half: '+sal.att.half+'</span>';
-  html += '<span style="color:var(--red);font-weight:700">Absent: '+sal.att.absent+'</span>';
-  html += '<span style="color:var(--purple);font-weight:700">Leave: '+sal.att.leave+'</span>';
+  html += '<div style="font-size:11px;color:var(--muted);padding:6px 0;border-top:1px solid var(--line)">';
+  html += 'Effective days: <b>'+sal.effectiveDays+'</b> out of <b>'+sal.workDays+'</b> working days';
+  if(sal.lopDays > 0) html += ' &nbsp;|&nbsp; <span style="color:var(--red);font-weight:700">LOP: '+sal.lopDays.toFixed(1)+' days</span>';
+  html += '</div>';
+
+  // Attendance wrong? Escalate button
+  html += '<div style="margin-top:10px;background:#FFF7ED;border-radius:8px;padding:10px;border:1px solid #FDE68A">';
+  html += '<div style="font-size:11px;font-weight:700;color:#7A4F00;margin-bottom:6px">⚠️ Attendance wrong? Escalate to Admin</div>';
+  html += '<textarea id="escalate-msg" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;font-size:12px;font-family:inherit;resize:none;height:56px" placeholder="Describe the issue e.g. Missing attendance on 25th June..."></textarea>';
+  html += '<button onclick="sendEscalation()" style="width:100%;margin-top:6px;padding:9px;background:#D97706;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">📤 Send to Admin</button>';
   html += '</div></div>';
+
+  // Salary breakdown
+  html += '<div class="sal-breakdown">';
+  html += '<div class="sal-item full" style="grid-column:1/-1;border-left:3px solid var(--gm)">';
+  html += '<div class="sal-item-label">Monthly Fixed Salary</div>';
+  html += '<div class="sal-item-val" style="color:var(--gm)">Rs.'+sal.fixedMonthly.toFixed(0)+'</div>';
+  html += '<div class="sal-item-sub">Rs.'+sal.dailyRate.toFixed(0)+'/day × '+sal.effectiveDays+' days = Rs.'+sal.proRata.toFixed(0)+'</div>';
+  html += '</div>';
+  if(sal.allowance > 0){
+    html += '<div class="sal-item"><div class="sal-item-label">Daily Allowance</div><div class="sal-item-val">Rs.'+sal.allowance.toFixed(0)+'</div><div class="sal-item-sub">'+sal.effectiveDays+' days</div></div>';
+  }
+  if(sal.incentive > 0){
+    html += '<div class="sal-item"><div class="sal-item-label">Installation Bonus</div><div class="sal-item-val">Rs.'+sal.incentive.toFixed(0)+'</div><div class="sal-item-sub">'+sal.installations+' × Rs.'+sal.setup.incentive+'</div></div>';
+  }
+  if(sal.lopAmount > 0){
+    html += '<div class="sal-item" style="border-left:3px solid var(--red)"><div class="sal-item-label">Loss of Pay (LOP)</div><div class="sal-item-val" style="color:var(--red)">- Rs.'+sal.lopAmount.toFixed(0)+'</div><div class="sal-item-sub">'+sal.lopDays.toFixed(1)+' days</div></div>';
+  }
+  html += '<div class="sal-item" style="border-left:3px solid var(--gm);grid-column:1/-1"><div class="sal-item-label">Net Payable</div><div class="sal-item-val" style="color:var(--gm);font-size:24px">Rs.'+sal.total.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,',')+'</div><div class="sal-item-sub">'+fmtMonth(mySlipMonth)+' · '+pmt.status+'</div></div>';
+  html += '</div>';
   el.innerHTML = html;
 }
 
@@ -2484,11 +2566,10 @@ function setSyncStatus(status) {
 
 // ── SYNC ALL TO SUPABASE ──────────────────────────────────────────────────
 function syncData() {
-  if(!navigator.onLine) { showToast('No internet'); return; }
-  if(syncInProgress) { showToast('Sync in progress...'); return; }
+  if(!navigator.onLine) { setSyncStatus('offline'); return; }
+  if(syncInProgress) { return; }
   syncInProgress = true;
-  setSyncStatus('syncing');
-  showToast('Syncing to cloud...');
+  setSyncStatus('saving');
   
   var promises = [];
 
@@ -2614,11 +2695,9 @@ function syncData() {
     syncInProgress = false;
     setSyncStatus('done');
     updateBadge();
-    showToast('✓ All data synced to cloud!');
   }).catch(function(e) {
     syncInProgress = false;
     setSyncStatus('error');
-    showToast('Sync error: ' + e.message);
     console.error('Sync error:', e);
   });
 }
@@ -2654,7 +2733,34 @@ function uploadLiftPhotoAndSync(rec) {
 // ── AUTO SYNC on submit ───────────────────────────────────────────────────
 function autoSyncIfOnline() {
   if(navigator.onLine && !syncInProgress) {
-    setTimeout(syncData, 1500);
+    setSyncStatus('saving');
+    setTimeout(syncData, 800);
+  }
+}
+function setSyncStatus(status){
+  var sico = document.getElementById('sico');
+  var slbl = document.getElementById('sync-label');
+  if(!sico || !slbl) return;
+  if(status === 'saving'){
+    sico.textContent = '⟳'; sico.style.color = '#F5A623';
+    slbl.textContent = 'Saving...';
+  } else if(status === 'done'){
+    sico.textContent = '✓'; sico.style.color = '#27AE60';
+    slbl.textContent = 'Saved';
+    setTimeout(function(){ 
+      sico.textContent = '●'; sico.style.color = '#fff';
+      slbl.textContent = 'Ready';
+    }, 2000);
+  } else if(status === 'error'){
+    sico.textContent = '!'; sico.style.color = '#DC2626';
+    slbl.textContent = 'Retry';
+    setTimeout(function(){
+      sico.textContent = '●'; sico.style.color = '#fff';
+      slbl.textContent = 'Ready';
+    }, 3000);
+  } else if(status === 'offline'){
+    sico.textContent = '○'; sico.style.color = 'rgba(255,255,255,0.5)';
+    slbl.textContent = 'Offline';
   }
 }
 
@@ -2777,6 +2883,76 @@ function loadFromCloud() {
 
   // Load auth
   loadAuthFromCloud();
+}
+
+
+// ── ESCALATION SYSTEM ─────────────────────────────────────────────────────
+var ESC_SK = 'bviq_escalations_v1';
+var escalations = [];
+
+function loadEscalations(){
+  try{ escalations = JSON.parse(localStorage.getItem(ESC_SK)||'[]'); }catch(e){ escalations=[]; }
+}
+function saveEscalations(){ localStorage.setItem(ESC_SK, JSON.stringify(escalations)); }
+
+function sendEscalation(){
+  var msg = document.getElementById('escalate-msg');
+  if(!msg || !msg.value.trim()){ showToast('Please describe the issue'); return; }
+  var esc = {
+    id: 'ESC-'+Date.now(),
+    empId: currentUser.empDbId,
+    empName: currentUser.name,
+    month: fmtMonth(mySlipMonth),
+    monthKey: fmtMonthKey(mySlipMonth),
+    message: msg.value.trim(),
+    status: 'pending',
+    ts: new Date().toISOString(),
+    date: new Date().toLocaleDateString('en-IN')
+  };
+  escalations.unshift(esc);
+  saveEscalations();
+  // Sync to Supabase escalations table if online
+  if(navigator.onLine){
+    supaFetch('POST','escalations',[{
+      id: esc.id,
+      emp_id: esc.empId,
+      emp_name: esc.empName,
+      month_key: esc.monthKey,
+      message: esc.message,
+      status: 'pending'
+    }],null).catch(function(e){ console.error('Escalation sync:', e); });
+  }
+  msg.value = '';
+  showToast('Escalation sent to Admin!');
+}
+
+// Admin view escalations in Salary tab
+function renderEscalations(){
+  if(!currentUser || !currentUser.isAdmin) return;
+  if(!navigator.onLine) return;
+  supaFetch('GET','escalations',null,'select=*&status=eq.pending&order=created_at.desc')
+    .then(function(rows){
+      if(!rows || !rows.length) return;
+      var el = document.getElementById('sal-emp-list');
+      if(!el) return;
+      var escHtml2 = '<div class="card" style="border-left:3px solid var(--orange);margin-bottom:10px">';
+      escHtml2 += '<div class="card-title" style="color:var(--orange)">⚠️ Pending Escalations ('+rows.length+')</div>';
+      rows.forEach(function(r){
+        escHtml2 += '<div style="padding:8px 0;border-bottom:1px solid var(--line)">';
+        escHtml2 += '<div style="font-size:12px;font-weight:700">'+escHtml(r.emp_name)+' — '+r.month_key+'</div>';
+        escHtml2 += '<div style="font-size:11px;color:var(--muted);margin-top:3px">'+escHtml(r.message)+'</div>';
+        escHtml2 += '<button onclick="resolveEscalation(\''+r.id+'\')" style="margin-top:6px;padding:4px 12px;background:var(--gm);color:#fff;border:none;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer">Mark Resolved</button>';
+        escHtml2 += '</div>';
+      });
+      escHtml2 += '</div>';
+      el.insertAdjacentHTML('beforebegin', escHtml2);
+    }).catch(function(e){ console.error('Load escalations:', e); });
+}
+
+function resolveEscalation(id){
+  supaFetch('PATCH','escalations',{status:'resolved'},'id=eq.'+id)
+    .then(function(){ showToast('Escalation resolved'); renderSalaryList(); })
+    .catch(function(e){ showToast('Error resolving'); });
 }
 
 function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
